@@ -1,5 +1,6 @@
 /*** Projeto de conlusão de curso de Engenharia de Computação - PUC Rio ***/
 /*** Autor: Miguel Baldez Boing ***/
+/*** Atualizações mantidas em: https://github.com/mbboing/projeto_final ***/
 
 //Define o máximo de estacoes que um AP pode ter
 #define MAX_STATIONS 10
