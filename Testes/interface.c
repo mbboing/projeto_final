@@ -75,18 +75,28 @@ struct alarm_node * alarm_list = NULL;
 unsigned int alarm_ids = 1;
 
 //Sockets para a comunicacao TCP
-int client_socket;
 int server_socket;
+int client_socket;
+
+//Handle das tasks
+TaskHandle_t tcp_server_handle = NULL;
+TaskHandle_t tcp_client_handle = NULL;
+
+int server_started = 0;
+
+/*********************************************************************/
+/************************* Funcoes do alarme *************************/
+/*********************************************************************/
 
 //Funcao para debug
 void print_lista(){
 	Alarm_node * current = alarm_list;
-	printf("Inicio\n");
+	//printf("Inicio\n");
     while (current != NULL) {
-		printf("%d\n",current->id);		
+		//printf("%d\n",current->id);		
         current = current->next;
 	}
-	printf("Fim\n");
+	//printf("Fim\n");
 }
 
 
@@ -214,6 +224,10 @@ void remove_alarm(unsigned int alarm_id){
     }
 
 }
+
+/*********************************************************************/
+/*********************** Funcoes da interrupcao **********************/
+/*********************************************************************/
 
 //Funcoes de callback de acordo com o pino
 void int_clbk_0(){
@@ -350,6 +364,7 @@ uint64_t get_gpio_bit_mask(unsigned int pin){
 	
 }
 
+//Funcao que define uma entrada como interrupcao
 int define_interrupt(int pin){
 
 	gpio_config_t gpioConfig;
@@ -395,7 +410,11 @@ int define_interrupt(int pin){
 
 }
 
+/*********************************************************************/
+/************************* Funcoes do WiFi ***************************/
+/*********************************************************************/
 
+//Adiciona uma estação que se acabou de se conectar
 void add_station(int new_socket){
 	int i, j;
 	int mac_found = 0;
@@ -413,13 +432,22 @@ void add_station(int new_socket){
 
 			//Verifica se o mac já está na lista global
 			for(j=0; j<next_id; j++){
-				if(strcmp((char*) stations_list[j].mac, (char*) stations.sta[i].mac) == 0){
+
+
+				if(stations.sta[i].mac[0] == stations_list[j].mac[0] &&
+				stations.sta[i].mac[1] == stations_list[j].mac[1] &&
+				stations.sta[i].mac[2] == stations_list[j].mac[2] &&
+				stations.sta[i].mac[3] == stations_list[j].mac[3] &&
+				stations.sta[i].mac[4] == stations_list[j].mac[4] &&
+				stations.sta[i].mac[5] == stations_list[j].mac[5]){
+
 					mac_found = 1;
 
 					//Se estiver desconectado, reconecta
 					if(stations_list[j].connected == 0){
 						stations_list[j].connected = 1;
 						stations_list[j].socket = new_socket;
+
 						when_a_station_connects(j);
 						return;
 					}
@@ -429,13 +457,16 @@ void add_station(int new_socket){
 
 			//Se não tiver, o adiciona
 			if(!mac_found){
-				//bcopy((char *)&afds, (char*)&rfds, sizeof(afds));
-                                //printf("%s\n",(char*) stations.sta[i].mac);
 
-
-				strcpy((char*) stations_list[next_id].mac, (char*) stations.sta[i].mac);
+				stations_list[next_id].mac[0] = stations.sta[i].mac[0];
+				stations_list[next_id].mac[1] = stations.sta[i].mac[1];
+				stations_list[next_id].mac[2] = stations.sta[i].mac[2];
+				stations_list[next_id].mac[3] = stations.sta[i].mac[3];
+				stations_list[next_id].mac[4] = stations.sta[i].mac[4];
+				stations_list[next_id].mac[5] = stations.sta[i].mac[5];
 				stations_list[next_id].connected = 1;
 				next_id++;
+
 				when_a_station_connects(next_id - 1);
 				return;
 			}
@@ -444,6 +475,7 @@ void add_station(int new_socket){
 
 }
 
+//Remove uma estação que se acabou de se desconectar
 void remove_station(){
 	int i, j;
 	wifi_sta_list_t	stations;
@@ -459,7 +491,13 @@ void remove_station(){
 			if(stations_list[i].connected){
 				int mac_found = 0;
 				for(j=0; j<stations.num; j++){
-					if(strcmp((char*) stations_list[i].mac, (char*) stations.sta[j].mac) == 0){
+					if(stations.sta[j].mac[0] == stations_list[i].mac[0] &&
+					stations.sta[j].mac[1] == stations_list[i].mac[1] &&
+					stations.sta[j].mac[2] == stations_list[i].mac[2] &&
+					stations.sta[j].mac[3] == stations_list[i].mac[3] &&
+					stations.sta[j].mac[4] == stations_list[i].mac[4] &&
+					stations.sta[j].mac[5] == stations_list[i].mac[5]){
+					//if(strcmp((char*) stations_list[i].mac, (char*) stations.sta[j].mac) == 0){
 						mac_found = 1;
 					}
 				}
@@ -494,8 +532,8 @@ void wifi_connect(char * ssid, char * password){
 			strcpy((char*) cfg.sta.ssid, ssid);
 			strcpy((char*) cfg.sta.password, password);
 
-                        //Para debug
-			//printf("Connecting to %s %s\n", (char*) cfg.sta.ssid, (char*) cfg.sta.password);
+            //Para debug
+			printf("Connecting to %s %s\n", (char*) cfg.sta.ssid, (char*) cfg.sta.password);
 
 			esp_wifi_disconnect();
 			esp_wifi_set_config(ESP_IF_WIFI_STA, &cfg);
@@ -504,6 +542,7 @@ void wifi_connect(char * ssid, char * password){
 	}
 }
 
+//Task do cliente
 void tcp_client(void *pvParam){
     struct sockaddr_in tcpServerAddr;
     tcpServerAddr.sin_addr.s_addr = inet_addr(TCPServerIP);
@@ -511,6 +550,7 @@ void tcp_client(void *pvParam){
     tcpServerAddr.sin_port = htons( 3000 );
     char recv_buf[64];	//Buffer de leitura
     int r;				//Tamanho do buffer
+
     while(1){
 
 		//Cria o socket
@@ -520,7 +560,7 @@ void tcp_client(void *pvParam){
             //printf("... Failed to allocate socket.\n");
             continue;
         }
-        printf("... allocated socket\n");
+        //printf("... allocated socket\n");
 
 		//Conecta com o servidor
         if(connect(client_socket, (struct sockaddr *)&tcpServerAddr, sizeof(tcpServerAddr)) != 0) {
@@ -529,7 +569,7 @@ void tcp_client(void *pvParam){
             close(client_socket);
             continue;
         }
-        printf("... connected \n");
+        //printf("... connected \n");
 
 		//Pequeno delay para garantir que a estação seja adicionada a lista do AP
 		vTaskDelay(500 / portTICK_PERIOD_MS);
@@ -549,11 +589,9 @@ void tcp_client(void *pvParam){
 	}
 }
 
+//Task do servidor
 void tcp_server(void *pvParam){
     struct sockaddr_in tcpServerAddr;
-    tcpServerAddr.sin_addr.s_addr = htonl(INADDR_ANY);
-    tcpServerAddr.sin_family = AF_INET;
-    tcpServerAddr.sin_port = htons( 3000 );
     static struct sockaddr_in remote_addr;
     static unsigned int socklen;
     socklen = sizeof(remote_addr);
@@ -561,8 +599,13 @@ void tcp_server(void *pvParam){
 	fd_set rfds; //read file descriptor set
 	fd_set afds; //active file descriptor set
 	int fd;
-	int select_ret;
 	int maxfd;
+
+	bzero((char*) &tcpServerAddr, sizeof(tcpServerAddr));
+    tcpServerAddr.sin_addr.s_addr = htonl(INADDR_ANY);
+    tcpServerAddr.sin_family = AF_INET;
+    tcpServerAddr.sin_port = htons( 3000 );
+
     while(1){
 
 		//Cria o socket
@@ -572,7 +615,10 @@ void tcp_server(void *pvParam){
             //printf("... Failed to allocate server socket.\n");
             continue;
         }
-        printf("... allocated server socket\n");
+		//Para debug
+        //printf("... allocated server socket\n");
+
+		setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR, &(int){ 1 }, sizeof(int));
 
 		//Conecta o socket ao cliente
          if(bind(server_socket, (struct sockaddr *)&tcpServerAddr, sizeof(tcpServerAddr)) != 0) {
@@ -581,7 +627,8 @@ void tcp_server(void *pvParam){
             close(server_socket);
             continue;
         }
-        printf("... server socket bind done \n");
+		//Para debug
+        //printf("... server socket bind done \n");
         if(listen (server_socket, LISTENQ) != 0) {
             //Para debug
             //printf("... server socket listen failed errno=%d \n", errno);
@@ -597,15 +644,16 @@ void tcp_server(void *pvParam){
 
 			bcopy((char *)&afds, (char*)&rfds, sizeof(afds));
 			//select(FD_SETSIZE, &rfds, (fd_set*) 0, (fd_set*) 0, (struct timeval *) 0);
-			select_ret = select(maxfd + 1, &rfds, NULL, NULL, NULL);
+			select(maxfd + 1, &rfds, NULL, NULL, NULL);
 			for (fd = 0; fd <= maxfd; fd++){
 		        if (FD_ISSET(fd,&rfds)){ 
 
                         //Para debug
-                        //printf("Select: %d\n",fd);
+                        //printf("Select: %d; Server socket: %d\n",fd,server_socket);
 
 		            if (fd == server_socket){
 		                //new connection
+
 		                int newfd = accept(server_socket,(struct sockaddr *)&remote_addr, &socklen);
 		                FD_SET(newfd,&afds);
 						if(newfd > maxfd)
@@ -631,10 +679,6 @@ void tcp_server(void *pvParam){
 //Funcao de tratamento do Event Loop
 static esp_err_t event_handler(void *ctx, system_event_t *event)
 {
-    static struct sockaddr_in remote_addr;
-    static unsigned int socklen;
-    socklen = sizeof(remote_addr);
-
     switch(event->event_id) {
     	
     //Quando o modo sation for iniciado
@@ -644,7 +688,7 @@ static esp_err_t event_handler(void *ctx, system_event_t *event)
     
     //Quando tiver obtido o IP em modo station
     case SYSTEM_EVENT_STA_GOT_IP:
-		xTaskCreate(&tcp_client,"tcp_client",4048,NULL,5,NULL);
+		xTaskCreate(&tcp_client,"tcp_client",4096,NULL,5,&tcp_client_handle);
         break;
         
 	//Quando o wifi desconectar
@@ -654,14 +698,17 @@ static esp_err_t event_handler(void *ctx, system_event_t *event)
         
     //Quando o modo AP for iniciado
 	case SYSTEM_EVENT_AP_START:
-		xTaskCreate(&tcp_server,"tcp_server",4096,NULL,5,NULL);
-        when_wifi_starts(1);
+		if(server_started == 0){
+			server_started = 1;
+			xTaskCreate(&tcp_server,"tcp_server",4096,NULL,5,&tcp_server_handle);
+        	when_wifi_starts(1);
+		}
         break;
         
     //Quando uma estacao se conectar
 	case SYSTEM_EVENT_AP_STACONNECTED:
 
-                //Para debug
+		//Para debug
 		//printf("STACONN\n");
 		
 		break;
@@ -669,7 +716,7 @@ static esp_err_t event_handler(void *ctx, system_event_t *event)
 	//Quando uma estacao se desconectar
 	case SYSTEM_EVENT_AP_STADISCONNECTED:
 
-                //Para debug
+		//Para debug
 		//printf("STADISCONN\n");
 		
 		remove_station();
@@ -697,20 +744,26 @@ static void start_dhcp_server(){
         tcpip_adapter_set_ip_info(TCPIP_ADAPTER_IF_AP, &info);
         // Inicia o DHCP  
         tcpip_adapter_dhcps_start(TCPIP_ADAPTER_IF_AP);
-        printf("DHCP server started \n");
+		
+		//Para debug
+        //printf("DHCP server started \n");
 }
 
-//Funcao que inicia o wifi
+//Funcao que inicia o wifi como AP
 void initialise_wifi_ap(char * ssid, char * password)
 {
-	int i,j;
+	int i,j;	
 
-	esp_wifi_stop();
-
-	//Desliga o log do wifi
-    esp_log_level_set("wifi", ESP_LOG_NONE);
+	esp_wifi_disconnect();
 	
 	start_dhcp_server();
+
+	//Marca as estações como desconectadas inicialmente
+	for(i=0; i<MAX_STATIONS; i++){
+		for(j=0; j<6; j++)	{
+			stations_list[i].connected = 0;
+		}
+	}
 
 	//Configuracao padrao
 	wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
@@ -735,27 +788,23 @@ void initialise_wifi_ap(char * ssid, char * password)
 	strcpy((char*) ap_config.ap.password, password);
 	esp_wifi_set_config(WIFI_IF_AP, &ap_config);
 
-        //Para debug
+	//Para debug
 	//printf("WiFi iniciado em modo AP \n");
 
-	//Zera as estações conectadas
-	for(i=0; i<MAX_STATIONS; i++){
-		for(j=0; j<6; j++)	{
-			stations_list[i].mac[j] = 0x00;
-			stations_list[i].connected = 0;
-		}
-	}
+	server_started = 0;
 	
 	//Inicia wifi
 	esp_wifi_start();
+
+	//Fecha a conexão e deleta a task do cliente
+	close(client_socket);
+	vTaskDelete(tcp_client_handle);
 }
 
+//Funcao que inicia o wifi como station
 void initialise_wifi_sta()
 {
 	esp_wifi_stop();
-
-	//Desliga o log do wifi
-    esp_log_level_set("wifi", ESP_LOG_NONE);
     
 	tcpip_adapter_init();
 	
@@ -769,8 +818,13 @@ void initialise_wifi_sta()
 	
 	//Inicia wifi
 	esp_wifi_start();
+	
+	//Fecha a conexão e deleta a task do servidor
+	close(server_socket);
+	vTaskDelete(tcp_server_handle);
 }
 
+//Funcao que busca as redes WiFi disponíveis
 unsigned int scan_wifi(char (*ssids)[30], unsigned int ssids_qnt){
 
 	wifi_scan_config_t config;
@@ -804,11 +858,16 @@ unsigned int scan_wifi(char (*ssids)[30], unsigned int ssids_qnt){
 
 	}
 
+
 	free(aps);
 	return 0;
 }
 
+//Envia uma mensagem para o no especificado
 void send_message(char message[64], unsigned int to_node){
+
+	//Para debug
+	printf("Sending message to %d: %s\n",to_node, message);
 
 	if(to_node == AP_NODE){
 		write(client_socket , message , strlen(message));
@@ -825,9 +884,14 @@ void send_message(char message[64], unsigned int to_node){
 
 }
 
+/*********************************************************************/
+/************************** Funcao inicial ***************************/
+/*********************************************************************/
+
 //Função main
 void app_main()
 {
+	int i,j;
 
 	//Instala o serviço de interrupção dos pinos
 	gpio_install_isr_service(0);	
@@ -837,6 +901,17 @@ void app_main()
     
     //Inicia a memoria nao volatil, necessaria para usar o wifi
     nvs_flash_init();
+
+	//Zera a lista de estações conectadas
+	for(i=0; i<MAX_STATIONS; i++){
+		for(j=0; j<6; j++)	{
+			stations_list[i].mac[j] = 0x00;
+			stations_list[i].connected = 0;
+		}
+	}
+
+	//Desliga o log do wifi
+    esp_log_level_set("wifi", ESP_LOG_NONE);
 
 	//Chama a funcao inicial do usuario
 	when_system_starts();
