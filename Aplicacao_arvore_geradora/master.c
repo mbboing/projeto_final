@@ -13,7 +13,7 @@
 #define ID 1
 
 //Tempo de timeout caso nao se encontre filhos
-#define TIMEOUT 20000
+#define TIMEOUT 15000
 
 //Valor para simular o valor de um sensor
 #define VIRTUALSENSOR 10
@@ -28,7 +28,8 @@ int stations_ids[10];
 int total_de_estacoes = 0;
 int ramos_concluidos = 0;
 
-//Nome da rede WiFi do nó pai
+//Nome da própria rede WiFi e a rede do nó pai
+char ssid_proprio[6];
 char ssid_pai[30];
 
 //String com a próxima mensagem a ser enviada
@@ -37,6 +38,12 @@ char mensagem[64];
 //Indica se a árvore já está construída a partir deste nó e se já avisou isso ao nó pai
 int ramo_concluido = 0;
 int aviso_enviado = 0;
+
+//Estado de requisição do valor do sensor
+int requesting = 0;
+
+//Debouncing para a interrupção de entrada
+int debouncing = 0;
 
 
 void when_system_starts(void){
@@ -73,11 +80,19 @@ void when_alarm_fired(unsigned int alarm_id){
 			initialise_wifi_sta();
 		}
 		else{
-			printf("Arvore concluída sem nos.\n");
+
+			//A arvore já está completa com um nó
+
+			ramo_concluido = 1;
+
+			printf("Arvore concluída sem filhos.\n");
 		}
 	}
 
-	if(alarm_id == request_alarm){
+	else if(alarm_id == request_alarm){
+
+		//Desativa o debouncing
+		debouncing = 0;
 
 		//No caso da base station
 		if(ID == 1){
@@ -85,8 +100,9 @@ void when_alarm_fired(unsigned int alarm_id){
 			//Envia mensagem pedindo o valor dos sensores para todos os filhos
 			if(total_de_estacoes > 0){
 				ramos_concluidos = 0;
+				//printf("total_de_estacoes: %d\n", total_de_estacoes);
 				for(int i=0; i<total_de_estacoes; i++){
-	//ets_printf("Request to %d\n", stations_ids[i]);
+					printf("%d: Request to %d\n", i, stations_ids[i]);
 					send_message("Sensor request", stations_ids[i]);
 				}
 			}
@@ -101,13 +117,18 @@ void when_alarm_fired(unsigned int alarm_id){
 
 void when_interrupt_emitted(unsigned int pin, int signal_edge){
 
-	ets_printf("\nInterrupt of pin %d emitted. Signal_edge: %d\n", pin, signal_edge);
+	//ets_printf("\nInterrupt of pin %d emitted. Signal_edge: %d\n", pin, signal_edge);
 
-	if(signal_edge == 1){
-		if(ramo_concluido){
+	if(debouncing == 0){
+		if(signal_edge == 1){
+			//if(ramo_concluido){
 
-			request_alarm = create_alarm(100, 0);
+				request_alarm = create_alarm(500, 0);
+
+				//Ativa o debouncing
+				debouncing = 1;
 		
+			//}
 		}
 	}
 }
@@ -117,23 +138,29 @@ void when_wifi_starts(int ap){
 	//Se for AP é o pai, senão é um filho que deve buscar um pai
 	if(ap){
 
-                //Para debug
-                //printf("Wifi started - AP mode\n");
+        //Para debug
+        printf("Wifi started - AP mode\n");
 
-		//Cria um timer de timeout caso não encontre filhos
-		timeout_alarm = create_alarm(TIMEOUT, 0);
+		//Estado de montagem da arvore
+		if(!ramo_concluido){
+			//Cria um timer de timeout caso não encontre filhos
+			timeout_alarm = create_alarm(TIMEOUT, 0);
+		}
 	}
 	else{
+
+		//Para debug
+		printf("Wifi started - STA mode\n");
+
 		
 		//Se ainda estiver na etapa de construção da árvore
 		if(!ramo_concluido){
+
+			
 			char ssids[30][30];
 			char first_letters[4];
 			unsigned int ssids_totals, i;
 			unsigned int ssid_found = 0;
-
-                        //Para debug
-                        //printf("Wifi started - STA mode\n");
 
 			//Busca um ssid com o nome começado com 'ESP' e salva como ssid do pai
 			do{
@@ -142,9 +169,6 @@ void when_wifi_starts(int ap){
 					strcpy(first_letters, ssids[i]);
 					first_letters[3] = '\0';
 
-                                        //Para debug
-                                        //printf("%s\n",first_letters);
-
 					if(strcmp(first_letters,"ESP") == 0){
 						strcpy(ssid_pai, ssids[i]);
 						ssid_found = 1;
@@ -152,33 +176,40 @@ void when_wifi_starts(int ap){
 				}
 			}while(!ssid_found);
 
-                        //Para debug
-                        //printf("wifi found: %s\n", ssid_pai);
+			//Para debug
+			printf("wifi found: %s\n", ssid_pai);
+			strcpy(ssid_pai, "ESP1");
 
-			wifi_connect(ssid_pai, "eventinterface");
+			//wifi_connect(ssid_pai, "eventinterface");
+			
 		}
 		
 		//Senão conecta ao WiFi do nó pai
 		else{
 			wifi_connect(ssid_pai, "eventinterface");
 		}
+		
+
+		//wifi_connect("ESP1", "eventinterface");
 	}
+
 }
 
 void when_wifi_connects(){
 
-        //Para debug
-	//printf("wifi connected!\n");
+    //Para debug
+	printf("wifi connected!\n");
 		
 	//Se ainda estiver na etapa de construção da árvore, muda para o modo AP para buscar filhos
 	if(!ramo_concluido){
-		char ssid[6], id[3];
+		char id[3];
 
 		//O nome da rede WiFi será sempre ESP seguido do ID do nó
 		sprintf(id, "%d", ID);
-		strcpy(ssid, "ESP");
-		strcat(ssid, id);
-		initialise_wifi_ap(ssid, "eventinterface");
+		strcpy(ssid_proprio, "ESP");
+		strcat(ssid_proprio, id);
+
+		initialise_wifi_ap(ssid_proprio, "eventinterface");
 	}
 
 	//Senão, avisa que o ramo está concluído na primeira reconexão
@@ -187,27 +218,49 @@ void when_wifi_connects(){
 		aviso_enviado = 1;
 	}
 
+	//Se estiver no estado de requisição dos valores
+	if(requesting){
+
+		//Sai do estado de requisição
+		requesting = 0;
+
+		//Repassa a mensagem para o pai
+		send_message(mensagem, AP_NODE);
+	}
+
 }
 
 void when_a_station_connects(unsigned int station_connected){
 
 	int id_found = 0;
 
-        //Para debug
+    //Para debug
 	printf("Estacao conectada: %d\n", station_connected);
 
 	//Remove o alarme de timeout
 	remove_alarm(timeout_alarm);
 
 	//Verifica se a estação conectada é nova, isto é, se não está no vetor de estações	
-	for(int i=0; i<total_de_estacoes; i++)
-		if(stations_ids[total_de_estacoes] == station_connected)
+	for(int i=0; i<total_de_estacoes; i++){
+		if(stations_ids[i] == station_connected){
+
 			id_found = 1;
+			break;
+		}
+	}
 
 	//Caso seja nova, adiciona ao vetor de estações
 	if(!id_found){
+
 		stations_ids[total_de_estacoes] = station_connected;
 		total_de_estacoes++;
+	}
+
+	//Estado de requisicao dos valores
+	if(requesting){
+
+		//Repassa o pedido
+		send_message("Sensor request", station_connected);
 	}
 
 }
@@ -215,7 +268,7 @@ void when_a_station_connects(unsigned int station_connected){
 void when_a_station_disconnects(unsigned int station_disconnected){
 
         //Para debug
-        //printf("%d\n", station_disconnected);
+        printf("Estacao desconectada: %d\n", station_disconnected);
 
 }
 
@@ -251,12 +304,15 @@ void when_receive_message(unsigned int node, char* message){
 			send_message(mensagem, AP_NODE);
 		}
 
-		//Senão repassa o pedido e reinicia a variavel de ramos concluidos para fazer a contagem das respostas
+		//Senão reinicia com AP para reenviar as mensagens
 		else{
+			//Entra no estado de requisição
+			requesting = 1;
+			//Reinicia a variavel de ramos concluidos para fazer a contagem das respostas
 			ramos_concluidos = 0;
-			mensagem[0] = '\0';
-			for(int i=0; i<total_de_estacoes; i++)
-				send_message("Sensor request", stations_ids[i]);
+			//Inicia a mensagem com o próprio valor
+			sprintf(mensagem, "%d:%d\n", ID, VIRTUALSENSOR);
+			initialise_wifi_ap(ssid_proprio, "eventinterface");
 		}
 	}
 
@@ -264,7 +320,7 @@ void when_receive_message(unsigned int node, char* message){
 	else{
 		ramos_concluidos++;
 		
-                //Para debug
+		//Para debug
 		//printf("ramos concluidos: %d\n",ramos_concluidos);
 
 		//Armazena o valor recebido na mensagem de resposta a ser enviada
@@ -275,11 +331,14 @@ void when_receive_message(unsigned int node, char* message){
 			
 			//Se for base station, mostra os valores
 			if(ID == 1)
-				printf("ID:SENSOR:\n%d:%d\n%s\n", ID, VIRTUALSENSOR, message);
+				printf("ID:SENSOR:\n%d:%d\n%s\n", ID, VIRTUALSENSOR, mensagem);
 
-			//Se não for, repassa os valores para o nó pai
+			//Se não for, se reconecta ao pai para repassar os valores
 			else
-				send_message(mensagem, AP_NODE);
+				initialise_wifi_sta();
+
+			//Limpa a string de mensagem
+			strcpy(mensagem,"");
 		}
 	}
 }
